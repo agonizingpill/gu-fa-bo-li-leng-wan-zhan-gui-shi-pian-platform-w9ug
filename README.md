@@ -9,7 +9,7 @@
 - 弯模与行程 `jigs`，字段为 `spread`（台面跨度 mm）、`max_throw`（最大行程 mm）、`calibrated`（量具在校）。模型约束位于 `backend/domain/jigs_model.py`，规则位于 `jigs_service.py`。
 - 温区试片 `coupons`，字段为 `jig`（弯模）、`heat`（保温温度 °C）、`thick`（片厚 mm）、`target`（目标弯度 mm）、`measured`（冷却弯度 mm）、`locked`（已确认）。模型约束位于 `backend/domain/coupons_model.py`，规则位于 `coupons_service.py`。
 - 预测曲线签注 `profiles`，字段为 `coupon`（基准试片）、`prediction`（拟合弯度 mm）、`mae`（留出 MAE mm）、`curve`（改善说明）、`token`（拟合编号）。模型约束位于 `backend/domain/profiles_model.py`，规则位于 `profiles_service.py`。
-- 试制工位委托 `work_orders`，字段为 `profile`（依据）、`jig`（工位弯模）、`slot`（机位时段）、`quantity`（试片数）、`state`（状态）。模型约束位于 `backend/domain/work_orders_model.py`，规则位于 `work_orders_service.py`。
+- 试制工位委托 `work_orders`，字段为 `profile`（依据）、`jig`（工位弯模）、`slot`（机位时段）、`quantity`（试片数）、`state`（状态），多片流程另记 `first_bend`（首片冷却弯度）、`first_attempts`（首片签回次数）、`revised_prediction`（偏差修正后预测）、`travel_bound`（行程上界）、`release_throw`（开工时弯模行程）、`release_basis`（放行依据快照）。模型约束位于 `backend/domain/work_orders_model.py`，规则位于 `work_orders_service.py`。
 
 团队为模拟的6 人打样组，负责展柜旧式玻璃的冷弯样件。
 
@@ -54,9 +54,20 @@ Compose 运行 Nginx、Python FastAPI、独立 Redis 消费进程、SQL 数据�
 | 弯模与行程 | `/jigs` /jigs/calibrate | `frontend/src/pages/jigs.js` |
 | 温区试片 | `/coupons` /coupons/record-coupon，/coupons/witness | `frontend/src/pages/coupons.js` |
 | 预测曲线签注 | `/profiles` /profiles/fit-curve，/profiles/sign-profile | `frontend/src/pages/profiles.js` |
-| 试制工位委托 | `/work_orders` /work_orders/book-jig，/work_orders/complete | `frontend/src/pages/work_orders.js` |
+| 试制工位委托 | `/work_orders` /work_orders/book-jig，/work_orders/sign-first，/work_orders/start-remain，/work_orders/complete | `frontend/src/pages/work_orders.js` |
+
+### 多片委托的首片与余片流程
+
+试片数大于 1 的委托在 `book-jig` 后进入“待首片签回”，先打一片再开余片：
+
+1. 复核员在工位页用 `/work_orders/sign-first` 签首片冷却弯度。系统以首片实弯与签注预测的偏差修正余片预测（修正预测 = 签注预测 +（首片实弯 − 签注预测）），再加曲线留出 MAE 得行程上界（上界 = 修正预测 + MAE）。首片重签会重算，但 `first_attempts` 不重复计数。
+2. `/work_orders/start-remain` 放行余片：未签首片、弯模失校，或行程上界超出弯模当前行程，均不开工。
+3. 余片开工与弯模重校并发。两个动作都先对弯模加 `SELECT ... FOR UPDATE` 行锁再处理委托，先办成者决定判定结果；开工后把当时的弯模行程写入 `release_throw`、把完整放行依据写入 `release_basis`，随后的重校不再影响本单。
+4. 多片委托须余片开工后再 `/work_orders/complete` 签回，才算整单完成；单片委托（试片数为 1）沿用一次签回的简单流程。
 
 SQL 实体与约束在 `backend/domain` 下维护。前端使用原生 ES modules。核心算子为 PolynomialFeatures + Lasso。算法按温度排序每四条留出一条；训练拟合二次多项式和标准化。报告使用 mm 和可复现特征系数。
+
+> 注：`work_orders` 新增了首片与放行依据等可空列。项目不附带迁移工具，使用既有命名卷时需先清卷重建（或手动 `ALTER TABLE work_orders ADD COLUMN ...`），新卷由 `metadata.create_all` 直接建出。
 
 数据为模拟试制记录。工单留在本地数据库供核查。
 

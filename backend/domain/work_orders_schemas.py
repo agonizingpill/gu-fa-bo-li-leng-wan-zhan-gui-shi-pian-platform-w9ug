@@ -11,6 +11,17 @@ class BookJig(BaseModel):
     quantity: int
 
 
+class SignFirst(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    order: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
+    bend: FiniteFloat
+
+
+class StartRemain(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    order: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
+
+
 class Complete(BaseModel):
     model_config = ConfigDict(extra="forbid")
     order: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
